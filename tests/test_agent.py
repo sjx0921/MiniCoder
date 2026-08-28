@@ -53,6 +53,18 @@ class AgentLoopTests(unittest.TestCase):
             third_request = client.calls[2]
             self.assertEqual([message["role"] for message in third_request], ["system", "user"])
 
+    def test_history_is_compacted_before_a_new_model_request(self):
+        client = FakeClient([
+            {"role": "assistant", "content": "x" * 900},
+            {"role": "assistant", "content": "done"},
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            agent = CodingAgent(Path(directory), client, max_history_chars=1_000)
+            agent.run("first task")
+            agent.run("second task")
+        second_request = client.calls[1]
+        self.assertTrue(any("compacted locally" in message.get("content", "") for message in second_request))
+
 
 if __name__ == "__main__":
     unittest.main()

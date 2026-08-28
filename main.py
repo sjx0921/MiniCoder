@@ -17,6 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", help="OpenAI-compatible model name; overrides MINICODER_MODEL.")
     parser.add_argument("--base-url", help="OpenAI-compatible API base URL; overrides MINICODER_BASE_URL.")
     parser.add_argument("--max-turns", type=int, default=20, help="Maximum model/tool rounds (default: 20).")
+    parser.add_argument("--max-history-chars", type=int, default=80_000, help="Maximum approximate conversation size before compaction.")
     return parser
 
 
@@ -25,7 +26,7 @@ def create_agent(args: argparse.Namespace) -> CodingAgent:
     if not workspace.is_dir():
         raise SystemExit(f"Workspace is not a directory: {workspace}")
     client = LLMClient(base_url=args.base_url, model=args.model)
-    return CodingAgent(workspace, client, max_turns=args.max_turns)
+    return CodingAgent(workspace, client, max_turns=args.max_turns, max_history_chars=args.max_history_chars)
 
 
 def run_task(task: str, agent: CodingAgent) -> None:

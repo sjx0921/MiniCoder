@@ -12,12 +12,15 @@ from tools.registry import TOOL_DEFINITIONS, ToolRegistry
 
 
 class CodingAgent:
-    def __init__(self, workspace: Path, client: LLMClient, max_turns: int = 20) -> None:
+    def __init__(self, workspace: Path, client: LLMClient, max_turns: int = 20, max_history_chars: int = 80_000) -> None:
         if max_turns < 1:
             raise ValueError("max_turns must be at least 1")
+        if max_history_chars < 1_000:
+            raise ValueError("max_history_chars must be at least 1000")
         self.workspace = workspace.resolve()
         self.client = client
         self.max_turns = max_turns
+        self.max_history_chars = max_history_chars
         self.registry = ToolRegistry(self.workspace)
         self.messages: list[dict[str, Any]] = []
         self.reset()
@@ -26,11 +29,39 @@ class CodingAgent:
         """Clear conversation state while preserving the configured workspace."""
         self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
+    def _history_size(self) -> int:
+        return sum(len(str(message.get("content") or "")) + len(str(message.get("tool_calls") or "")) for message in self.messages)
+
+    def _compact_history(self) -> None:
+        """Bound API payload size while retaining recent conversational state.
+
+        Tool calls and their outputs occur in linked assistant/tool messages, so
+        they are retained as complete recent messages rather than cut apart.
+        """
+        if self._history_size() <= self.max_history_chars:
+            return
+        system = self.messages[0]
+        recent: list[dict[str, Any]] = []
+        size = 0
+        for message in reversed(self.messages[1:]):
+            message_size = len(str(message.get("content") or "")) + len(str(message.get("tool_calls") or ""))
+            if recent and size + message_size > self.max_history_chars // 2:
+                break
+            recent.append(message)
+            size += message_size
+        omitted = len(self.messages) - 1 - len(recent)
+        summary = {
+            "role": "system",
+            "content": f"Conversation history was compacted locally. {omitted} earlier messages were omitted; inspect workspace files and recent messages before acting.",
+        }
+        self.messages = [system, summary, *reversed(recent)]
+
     def run(self, task: str) -> str:
         if not task.strip():
             return "Please provide a task."
         self.messages.append({"role": "user", "content": task})
         for turn in range(1, self.max_turns + 1):
+            self._compact_history()
             try:
                 assistant_message = self.client.complete(self.messages, TOOL_DEFINITIONS)
             except LLMError as exc:
