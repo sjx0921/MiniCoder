@@ -35,6 +35,24 @@ class AgentLoopTests(unittest.TestCase):
             result = CodingAgent(Path(directory), client, max_turns=2).run("loop")
         self.assertIn("maximum of 2 turns", result)
 
+    def test_history_persists_between_tasks_and_can_be_reset(self):
+        client = FakeClient([
+            {"role": "assistant", "content": "First answer."},
+            {"role": "assistant", "content": "Second answer."},
+            {"role": "assistant", "content": "Fresh answer."},
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            agent = CodingAgent(Path(directory), client)
+            agent.run("First task")
+            agent.run("Follow up")
+            second_request = client.calls[1]
+            self.assertTrue(any(message.get("content") == "First task" for message in second_request))
+            self.assertTrue(any(message.get("content") == "First answer." for message in second_request))
+            agent.reset()
+            agent.run("New task")
+            third_request = client.calls[2]
+            self.assertEqual([message["role"] for message in third_request], ["system", "user"])
+
 
 if __name__ == "__main__":
     unittest.main()

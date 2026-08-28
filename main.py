@@ -20,23 +20,28 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run_task(task: str, args: argparse.Namespace) -> None:
+def create_agent(args: argparse.Namespace) -> CodingAgent:
     workspace = Path(args.workspace).resolve()
     if not workspace.is_dir():
         raise SystemExit(f"Workspace is not a directory: {workspace}")
     client = LLMClient(base_url=args.base_url, model=args.model)
-    agent = CodingAgent(workspace, client, max_turns=args.max_turns)
-    print(f"MiniCoder workspace: {workspace}")
+    return CodingAgent(workspace, client, max_turns=args.max_turns)
+
+
+def run_task(task: str, agent: CodingAgent) -> None:
     print(agent.run(task))
 
 
 def main() -> None:
     load_dotenv(Path(".env"))
     args = build_parser().parse_args()
+    agent = create_agent(args)
     if args.task:
-        run_task(args.task, args)
+        print(f"MiniCoder workspace: {agent.workspace}")
+        run_task(args.task, agent)
         return
-    print("MiniCoder interactive mode. Type 'exit' or 'quit' to leave.")
+    print(f"MiniCoder workspace: {agent.workspace}")
+    print("Interactive mode. Type 'exit' or 'quit' to leave; type '/reset' to clear chat history.")
     while True:
         try:
             task = input("\nTask> ").strip()
@@ -45,8 +50,12 @@ def main() -> None:
             return
         if task.lower() in {"exit", "quit"}:
             return
+        if task == "/reset":
+            agent.reset()
+            print("Conversation history cleared.")
+            continue
         if task:
-            run_task(task, args)
+            run_task(task, agent)
 
 
 if __name__ == "__main__":

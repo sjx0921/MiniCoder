@@ -19,18 +19,23 @@ class CodingAgent:
         self.client = client
         self.max_turns = max_turns
         self.registry = ToolRegistry(self.workspace)
+        self.messages: list[dict[str, Any]] = []
+        self.reset()
+
+    def reset(self) -> None:
+        """Clear conversation state while preserving the configured workspace."""
+        self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     def run(self, task: str) -> str:
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": task},
-        ]
+        if not task.strip():
+            return "Please provide a task."
+        self.messages.append({"role": "user", "content": task})
         for turn in range(1, self.max_turns + 1):
             try:
-                assistant_message = self.client.complete(messages, TOOL_DEFINITIONS)
+                assistant_message = self.client.complete(self.messages, TOOL_DEFINITIONS)
             except LLMError as exc:
                 return f"Agent stopped: {exc}"
-            messages.append(assistant_message)
+            self.messages.append(assistant_message)
             tool_calls = assistant_message.get("tool_calls") or []
             if not tool_calls:
                 return str(assistant_message.get("content") or "Agent finished without a final message.")
@@ -44,5 +49,5 @@ class CodingAgent:
                 else:
                     result = self.registry.execute(name, arguments)
                 print(f"[turn {turn}] {name}: {result[:500]}")
-                messages.append({"role": "tool", "tool_call_id": call.get("id", "missing-id"), "content": result})
+                self.messages.append({"role": "tool", "tool_call_id": call.get("id", "missing-id"), "content": result})
         return f"Agent stopped after reaching the maximum of {self.max_turns} turns."
