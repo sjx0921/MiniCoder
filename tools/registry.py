@@ -28,6 +28,11 @@ class ToolRegistry:
             "run_command": run_command,
         }
 
+    @staticmethod
+    def requires_confirmation(name: str) -> bool:
+        """Writes and shell commands require an explicit human approval in CLI mode."""
+        return name in {"write_file", "replace_in_file", "run_command"}
+
     def execute(self, name: str, arguments: dict[str, Any]) -> str:
         tool = self._tools.get(name)
         if tool is None:
@@ -40,4 +45,3 @@ class ToolRegistry:
             return f"Tool error: invalid arguments for {name}: {exc}"
         except ToolError as exc:
             return f"Tool error: {exc}"
-

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from llm import LLMClient, LLMError
 from prompts import SYSTEM_PROMPT
@@ -12,7 +12,7 @@ from tools.registry import TOOL_DEFINITIONS, ToolRegistry
 
 
 class CodingAgent:
-    def __init__(self, workspace: Path, client: LLMClient, max_turns: int = 20, max_history_chars: int = 80_000) -> None:
+    def __init__(self, workspace: Path, client: LLMClient, max_turns: int = 20, max_history_chars: int = 80_000, approval_callback: Callable[[str, dict[str, Any]], bool] | None = None) -> None:
         if max_turns < 1:
             raise ValueError("max_turns must be at least 1")
         if max_history_chars < 1_000:
@@ -22,6 +22,7 @@ class CodingAgent:
         self.max_turns = max_turns
         self.max_history_chars = max_history_chars
         self.registry = ToolRegistry(self.workspace)
+        self.approval_callback = approval_callback or (lambda _name, _arguments: True)
         self.messages: list[dict[str, Any]] = []
         self.reset()
 
@@ -78,7 +79,10 @@ class CodingAgent:
                 except json.JSONDecodeError as exc:
                     result = f"Tool error: invalid JSON arguments: {exc}"
                 else:
-                    result = self.registry.execute(name, arguments)
+                    if self.registry.requires_confirmation(name) and not self.approval_callback(name, arguments):
+                        result = f"Tool denied by user: {name} was not executed."
+                    else:
+                        result = self.registry.execute(name, arguments)
                 print(f"[turn {turn}] {name}: {result[:500]}")
                 self.messages.append({"role": "tool", "tool_call_id": call.get("id", "missing-id"), "content": result})
         return f"Agent stopped after reaching the maximum of {self.max_turns} turns."

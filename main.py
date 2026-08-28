@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 from agent import CodingAgent
@@ -18,6 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-url", help="OpenAI-compatible API base URL; overrides MINICODER_BASE_URL.")
     parser.add_argument("--max-turns", type=int, default=20, help="Maximum model/tool rounds (default: 20).")
     parser.add_argument("--max-history-chars", type=int, default=80_000, help="Maximum approximate conversation size before compaction.")
+    parser.add_argument("--auto-approve", action="store_true", help="Run file-changing tools and commands without asking for approval.")
     return parser
 
 
@@ -26,7 +28,13 @@ def create_agent(args: argparse.Namespace) -> CodingAgent:
     if not workspace.is_dir():
         raise SystemExit(f"Workspace is not a directory: {workspace}")
     client = LLMClient(base_url=args.base_url, model=args.model)
-    return CodingAgent(workspace, client, max_turns=args.max_turns, max_history_chars=args.max_history_chars)
+    def approve(name: str, arguments: dict) -> bool:
+        if args.auto_approve:
+            return True
+        print(f"\nApproval required for {name}: {json.dumps(arguments, ensure_ascii=False)}")
+        return input("Allow? [y/N] ").strip().lower() in {"y", "yes"}
+
+    return CodingAgent(workspace, client, max_turns=args.max_turns, max_history_chars=args.max_history_chars, approval_callback=approve)
 
 
 def run_task(task: str, agent: CodingAgent) -> None:

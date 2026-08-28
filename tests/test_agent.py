@@ -65,6 +65,18 @@ class AgentLoopTests(unittest.TestCase):
         second_request = client.calls[1]
         self.assertTrue(any("compacted locally" in message.get("content", "") for message in second_request))
 
+    def test_mutating_tool_can_be_denied(self):
+        client = FakeClient([
+            {"role": "assistant", "tool_calls": [{"id": "call_1", "function": {"name": "write_file", "arguments": '{"path":"blocked.txt","content":"no"}'}}]},
+            {"role": "assistant", "content": "Acknowledged."},
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            result = CodingAgent(workspace, client, approval_callback=lambda _name, _args: False).run("try writing")
+            self.assertEqual(result, "Acknowledged.")
+            self.assertFalse((workspace / "blocked.txt").exists())
+            self.assertIn("denied by user", client.calls[1][-1]["content"])
+
 
 if __name__ == "__main__":
     unittest.main()
