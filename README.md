@@ -11,6 +11,9 @@ MiniCoder 是一个从零实现的本地编程智能体。它使用 OpenAI 兼�
 - 工作区路径隔离：文件工具拒绝工作区以外的路径
 - 命令超时、输出截断、工具错误回传模型
 - 最大轮数限制，避免无限工具调用
+- 上下文字符上限与本地压缩，避免会话无限膨胀
+- 写文件、替换文本、执行命令前的人机确认；可用 `--auto-approve` 跳过
+- 文本搜索、Git 状态和 diff 统计，以及任务结束时的本地改动审查
 - 单次任务及持久上下文的交互式 CLI（支持 `/reset` 清空会话）
 
 ## 安装
@@ -42,7 +45,7 @@ python main.py "检查测试失败原因并修复它" --workspace C:\path\to\pro
 python main.py --workspace .
 ```
 
-可用参数：`--model`、`--base-url` 和 `--max-turns`。例如：
+可用参数：`--model`、`--base-url`、`--max-turns`、`--max-history-chars` 和 `--auto-approve`。例如：
 
 ```powershell
 python main.py "为模块补充单元测试" --model gpt-4o-mini --max-turns 15
@@ -52,7 +55,7 @@ python main.py "为模块补充单元测试" --model gpt-4o-mini --max-turns 15
 
 ## 安全模型与限制
 
-文件工具被限制在 `--workspace` 内，但 `run_command` 按模型请求在该工作区启动 shell 命令。因此仅应在可信项目中运行，并审阅模型输出和命令。当前版本没有跨会话持久记忆，也不会使用任何云端代码执行或文件 API。
+文件工具被限制在 `--workspace` 内。`run_command` 按模型请求在该工作区启动 shell 命令，因此仅应在可信项目中运行；默认会逐项请求确认。`--auto-approve` 会关闭这一确认，适合已审查的自动化任务。当前版本没有跨进程持久记忆，也不会使用任何云端代码执行或文件 API。
 
 ## 开发与测试
 

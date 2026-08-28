@@ -24,7 +24,7 @@ class AgentLoopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             result = CodingAgent(workspace, client, max_turns=3).run("create a file")
-            self.assertEqual(result, "Completed.")
+            self.assertTrue(result.startswith("Completed."))
             self.assertEqual((workspace / "answer.txt").read_text(encoding="utf-8"), "done")
             self.assertEqual(client.calls[1][-1]["role"], "tool")
 
@@ -73,7 +73,7 @@ class AgentLoopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             result = CodingAgent(workspace, client, approval_callback=lambda _name, _args: False).run("try writing")
-            self.assertEqual(result, "Acknowledged.")
+            self.assertTrue(result.startswith("Acknowledged."))
             self.assertFalse((workspace / "blocked.txt").exists())
             self.assertIn("denied by user", client.calls[1][-1]["content"])
 

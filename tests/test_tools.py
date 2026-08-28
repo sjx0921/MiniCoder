@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.file_tools import ToolError, list_files, read_file, resolve_workspace_path, write_file
+from tools.file_tools import ToolError, list_files, read_file, resolve_workspace_path, search_text, write_file
 from tools.registry import ToolRegistry
 from tools.shell_tool import run_command
 
@@ -32,6 +32,11 @@ class FileToolTests(unittest.TestCase):
         output = run_command(self.workspace, 'python -c "print(\'ok\')"')
         self.assertIn("Exit code: 0", output)
         self.assertIn("ok", output)
+
+    def test_search_text_returns_file_and_line_number(self):
+        write_file(self.workspace, "src/example.txt", "first\nneedle here\n")
+        result = search_text(self.workspace, "needle")
+        self.assertIn("src\\example.txt:2:", result)
 
 
 if __name__ == "__main__":

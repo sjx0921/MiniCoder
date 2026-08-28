@@ -9,6 +9,7 @@ from typing import Any, Callable
 from llm import LLMClient, LLMError
 from prompts import SYSTEM_PROMPT
 from tools.registry import TOOL_DEFINITIONS, ToolRegistry
+from tools.git_tools import git_diff, git_status
 
 
 class CodingAgent:
@@ -70,7 +71,8 @@ class CodingAgent:
             self.messages.append(assistant_message)
             tool_calls = assistant_message.get("tool_calls") or []
             if not tool_calls:
-                return str(assistant_message.get("content") or "Agent finished without a final message.")
+                final_message = str(assistant_message.get("content") or "Agent finished without a final message.")
+                return f"{final_message}\n\nLocal Git review:\n{self._git_review()}"
             for call in tool_calls:
                 function = call.get("function", {})
                 name = function.get("name", "")
@@ -86,3 +88,11 @@ class CodingAgent:
                 print(f"[turn {turn}] {name}: {result[:500]}")
                 self.messages.append({"role": "tool", "tool_call_id": call.get("id", "missing-id"), "content": result})
         return f"Agent stopped after reaching the maximum of {self.max_turns} turns."
+
+    def _git_review(self) -> str:
+        if not (self.workspace / ".git").exists():
+            return "Unavailable: workspace is not a Git repository."
+        try:
+            return f"Status:\n{git_status(self.workspace)}\nDiff stat:\n{git_diff(self.workspace)}"
+        except Exception as exc:  # A workspace need not be a Git repository.
+            return f"Unavailable: {exc}"

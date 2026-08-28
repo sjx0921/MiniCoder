@@ -64,3 +64,23 @@ def replace_in_file(workspace: Path, path: str, old_text: str, new_text: str) ->
         raise ToolError(f"Expected old_text exactly once in {path}, found {occurrences} occurrences")
     target.write_text(content.replace(old_text, new_text, 1), encoding="utf-8")
     return f"Replaced text in {target.relative_to(workspace.resolve())}"
+
+
+def search_text(workspace: Path, query: str, path: str = ".", max_results: int = 100) -> str:
+    if not query:
+        raise ToolError("query must not be empty")
+    target = resolve_workspace_path(workspace, path)
+    if not target.exists():
+        raise ToolError(f"Path does not exist: {path}")
+    files = [target] if target.is_file() else (entry for entry in target.rglob("*") if entry.is_file() and ".git" not in entry.parts)
+    matches: list[str] = []
+    for file_path in files:
+        try:
+            for line_number, line in enumerate(file_path.read_text(encoding="utf-8").splitlines(), start=1):
+                if query in line:
+                    matches.append(f"{file_path.relative_to(workspace.resolve())}:{line_number}: {line[:300]}")
+                    if len(matches) >= max_results:
+                        return "\n".join(matches) + "\n[truncated]"
+        except (UnicodeDecodeError, OSError):
+            continue
+    return "\n".join(matches) or "No matches found."
