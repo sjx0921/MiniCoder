@@ -30,6 +30,8 @@ def create_agent(args: argparse.Namespace) -> CodingAgent:
     if not workspace.is_dir():
         raise SystemExit(f"Workspace is not a directory: {workspace}")
     client = LLMClient(base_url=args.base_url, model=args.model)
+    if args.auto_approve and args.approval_mode != "ask":
+        raise SystemExit("--auto-approve 不能与显式 --approval-mode 同时使用")
     approval_mode = "auto" if args.auto_approve else args.approval_mode
     def approve(name: str, arguments: dict, risk: str, reason: str) -> bool:
         auto_allowed = (approval_mode == "auto" and risk in {"low", "medium"}) or (approval_mode == "ask" and risk == "low")

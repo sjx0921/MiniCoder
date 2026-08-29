@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -31,6 +32,15 @@ class CodingAgent:
         self.task_log: list[str] = []
         self.activity_log: list[str] = []
         self._awaiting_initial_plan = False
+        self._tools_forbidden = False
+        self._no_test_changes = False
+        self._allowed_write_paths: set[str] = set()
+        self._denied_operations: set[str] = set()
+        self._denied_write_paths: set[str] = set()
+        self._mutation_version = 0
+        self._last_verified_mutation_version = -1
+        self._successful_commands: dict[str, int] = {}
+        self._session_mutations: list[str] = []
         self.reset()
 
     def reset(self) -> None:
@@ -40,6 +50,15 @@ class CodingAgent:
         self.task_log = []
         self.activity_log = []
         self._awaiting_initial_plan = False
+        self._tools_forbidden = False
+        self._no_test_changes = False
+        self._allowed_write_paths = set()
+        self._denied_operations = set()
+        self._denied_write_paths = set()
+        self._mutation_version = 0
+        self._last_verified_mutation_version = -1
+        self._successful_commands = {}
+        self._session_mutations = []
 
     def _history_size(self) -> int:
         return sum(len(str(message.get("content") or "")) + len(str(message.get("tool_calls") or "")) for message in self.messages)
@@ -66,13 +85,14 @@ class CodingAgent:
         activities = " | ".join(self.activity_log[-12:]) or "No tool activity recorded."
         summary = {
             "role": "system",
-            "content": f"Structured local session summary: tasks={self.task_log[-5:]}; plan={plan_text}; recent tool activity={activities}. {omitted} earlier messages were compacted. Inspect workspace files and recent messages before acting.",
+            "content": f"Structured local session summary: tasks={self.task_log[-5:]}; plan={plan_text}; constraints=no_tools:{self._tools_forbidden}, no_test_changes:{self._no_test_changes}, allowed_paths:{sorted(self._allowed_write_paths)}; denied_operations:{sorted(self._denied_operations)}; mutation_version:{self._mutation_version}; last_verified_version:{self._last_verified_mutation_version}; recent tool activity={activities}. {omitted} earlier messages were compacted. Inspect workspace files and recent messages before acting.",
         }
         self.messages = [system, summary, *reversed(recent)]
 
     def run(self, task: str) -> str:
         if not task.strip():
             return "Please provide a task."
+        self._begin_task(task)
         self._awaiting_initial_plan = self._requires_initial_plan(task)
         self.task_log.append(task)
         self.messages.append({"role": "user", "content": task})
@@ -88,8 +108,11 @@ class CodingAgent:
                 if self._awaiting_initial_plan:
                     self.messages.append({"role": "user", "content": "你尚未遵守要求：此任务明确要求先制定计划。请先且仅先调用 update_plan，然后再继续。"})
                     continue
+                if self._needs_reverification():
+                    self.messages.append({"role": "user", "content": "最后一次成功测试后又发生了文件修改。不得宣布验证成功；请先运行相关验证命令并检查结果。"})
+                    continue
                 final_message = str(assistant_message.get("content") or "Agent finished without a final message.")
-                return f"{final_message}\n\nLocal Git review:\n{self._git_review()}"
+                return self._final_response(final_message)
             if self._awaiting_initial_plan and tool_calls[0].get("function", {}).get("name") != "update_plan":
                 for call in tool_calls:
                     name = call.get("function", {}).get("name", "")
@@ -112,16 +135,93 @@ class CodingAgent:
                         if not result.startswith("Tool error:"):
                             self._awaiting_initial_plan = False
                     else:
-                        risk, reason = self.registry.risk_level(name, arguments)
-                        if self.registry.requires_confirmation(name) and not self.approval_callback(name, arguments, risk, reason):
-                            result = f"Tool denied by user: {name} was not executed."
-                        else:
-                            result = self.registry.execute(name, arguments)
+                        result = self._execute_with_policy(name, arguments)
                 print(f"[进度 第{turn}轮] {self._progress_message(name, arguments)}")
                 print(f"[工具结果] {result[:500]}")
                 self.activity_log.append(f"{name}: {result[:300]}")
                 self.messages.append({"role": "tool", "tool_call_id": call.get("id", "missing-id"), "content": result})
-        return f"Agent stopped after reaching the maximum of {self.max_turns} turns."
+        return f"Agent stopped after reaching the maximum of {self.max_turns} turns; task may be incomplete."
+
+    def _begin_task(self, task: str) -> None:
+        self._awaiting_initial_plan = self._requires_initial_plan(task)
+        self._tools_forbidden = any(phrase in task.lower() for phrase in ("不要执行任何工具", "不要使用任何工具", "do not use any tools", "don't use tools"))
+        self._no_test_changes = any(phrase in task.lower() for phrase in ("不要修改测试", "不修改测试", "do not modify tests", "don't modify tests"))
+        self._allowed_write_paths = set(re.findall(r"(?:只改|仅改|only modify)\s*[`'\"]?([\w./\\-]+)", task, flags=re.IGNORECASE))
+        self._denied_operations = set()
+        self._denied_write_paths = set()
+        self._mutation_version = 0
+        self._last_verified_mutation_version = -1
+        self._successful_commands = {}
+        self._session_mutations = []
+        language = "Chinese" if re.search(r"[\u3400-\u9fff]", task) else "English"
+        self.system_prompt = build_system_prompt(describe_environment(self.workspace), language)
+        self.messages[0] = {"role": "system", "content": self.system_prompt}
+
+    def _operation_signature(self, name: str, arguments: dict[str, Any]) -> str:
+        if name == "run_command":
+            return f"command:{' '.join(str(arguments.get('command', '')).lower().split())}"
+        if name in {"write_file", "replace_in_file"}:
+            return f"write:{str(arguments.get('path', '')).replace('\\', '/').lower()}"
+        return f"{name}:{json.dumps(arguments, sort_keys=True, ensure_ascii=False)}"
+
+    def _execute_with_policy(self, name: str, arguments: dict[str, Any]) -> str:
+        signature = self._operation_signature(name, arguments)
+        if self._tools_forbidden:
+            return "工具已被用户禁止：本任务要求不要执行任何工具。"
+        if signature in self._denied_operations and not self._explicit_retry_requested():
+            return "该操作此前已被用户拒绝；未收到明确重试要求，因此不会再次请求或执行。"
+        if name == "run_command" and any(path and path.lower() in str(arguments.get("command", "")).lower() for path in self._denied_write_paths):
+            return "该命令可能绕过此前被拒绝的文件修改；未执行。"
+        if name in {"write_file", "replace_in_file"}:
+            path = str(arguments.get("path", "")).replace("\\", "/")
+            if self._no_test_changes and (path == "tests" or path.startswith("tests/")):
+                return "任务约束禁止修改测试文件；未执行。"
+            if self._allowed_write_paths and path not in self._allowed_write_paths:
+                return f"任务约束只允许修改 {sorted(self._allowed_write_paths)}；未执行 {path}。"
+        if name == "run_command" and self._successful_commands.get(signature) == self._mutation_version:
+            return "该命令已在当前代码版本成功执行；为避免重复，未再次运行。"
+        risk, reason = self.registry.risk_level(name, arguments)
+        if self.registry.requires_confirmation(name) and not self.approval_callback(name, arguments, risk, reason):
+            self._denied_operations.add(signature)
+            if name in {"write_file", "replace_in_file"}:
+                self._denied_write_paths.add(str(arguments.get("path", "")).replace("\\", "/"))
+            return f"用户已拒绝此操作：{name} 未执行。这不是普通工具错误，不应自动重试或绕过。"
+        result = self.registry.execute(name, arguments)
+        if name in {"write_file", "replace_in_file"} and not result.startswith("Tool error:"):
+            self._mutation_version += 1
+            self._session_mutations.append(str(arguments.get("path", "")))
+        if name == "run_command" and result.startswith("Exit code: 0"):
+            self._successful_commands[signature] = self._mutation_version
+            if self._is_test_command(str(arguments.get("command", ""))):
+                self._last_verified_mutation_version = self._mutation_version
+        return result
+
+    def _explicit_retry_requested(self) -> bool:
+        return bool(self.task_log and any(token in self.task_log[-1].lower() for token in ("重试", "再次尝试", "retry", "try again")))
+
+    @staticmethod
+    def _is_test_command(command: str) -> bool:
+        normalized = command.lower()
+        return any(token in normalized for token in ("unittest", "pytest", "npm test", "cargo test", "go test"))
+
+    def _needs_reverification(self) -> bool:
+        return self._last_verified_mutation_version >= 0 and self._mutation_version > self._last_verified_mutation_version and not self._tools_forbidden
+
+    def _final_response(self, final_message: str) -> str:
+        plan_state = "; ".join(f"[{item['status']}] {item['step']}" for item in self.plan) or "未创建计划"
+        facts = [
+            "框架执行事实：",
+            f"- 本任务会话内修改的文件：{', '.join(self._session_mutations) or '无'}",
+            f"- 最近成功测试对应代码版本：{self._last_verified_mutation_version if self._last_verified_mutation_version >= 0 else '未记录'}",
+            f"- 当前代码修改版本：{self._mutation_version}",
+            f"- 当前计划：{plan_state}",
+        ]
+        if self._tools_forbidden:
+            facts.append("- 用户明确禁止工具：框架未执行自动 Git 审查。")
+            return final_message + "\n\n" + "\n".join(facts)
+        if self._session_mutations or "git" in self.task_log[-1].lower():
+            facts.append("- 自动 Git 审查（框架操作，不是模型主动工具调用）：\n" + self._git_review())
+        return final_message + "\n\n" + "\n".join(facts)
 
     @staticmethod
     def _requires_initial_plan(task: str) -> bool:
@@ -139,10 +239,12 @@ class CodingAgent:
             "search_text": "正在搜索项目文本",
             "write_file": "正在写入实现文件",
             "replace_in_file": "正在做精确代码替换",
-            "run_command": "正在执行验证命令",
+            "run_command": "正在执行命令",
             "git_status": "正在检查 Git 工作区状态",
             "git_diff": "正在审查文件改动",
         }
+        if name == "run_command" and CodingAgent._is_test_command(str(arguments.get("command", ""))):
+            labels[name] = "正在运行测试"
         detail = arguments.get("path") or arguments.get("command") or ""
         return f"{labels.get(name, '正在调用本地工具')}{(': ' + str(detail)) if detail else ''}"
 
@@ -157,11 +259,13 @@ class CodingAgent:
             validated.append({"step": item["step"], "status": item["status"]})
         if sum(item["status"] == "in_progress" for item in validated) > 1:
             return "Tool error: only one plan step may be in_progress"
+        if validated == self.plan:
+            return "Plan unchanged: no phase transition occurred."
         self.plan = validated
         return "Plan updated: " + "; ".join(f"[{item['status']}] {item['step']}" for item in self.plan)
 
     def _git_review(self) -> str:
         try:
-            return f"Status:\n{git_status(self.workspace)}\nDiff stat:\n{git_diff(self.workspace)}"
+            return f"Git 状态：\n{git_status(self.workspace)}\nGit 改动审查：\n{git_diff(self.workspace)}"
         except Exception as exc:  # A workspace need not be a Git repository.
             return f"Unavailable: {exc}"

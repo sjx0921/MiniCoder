@@ -19,7 +19,16 @@ def describe_environment(workspace: Path) -> str:
 
     has_pytest_config = any((workspace / name).exists() for name in ("pytest.ini", "tox.ini"))
     has_unittest = any(workspace.glob("tests/test_*.py"))
-    if has_pytest_config:
+    has_package_json = (workspace / "package.json").exists()
+    has_cargo = (workspace / "Cargo.toml").exists()
+    has_go = (workspace / "go.mod").exists()
+    if has_cargo:
+        test_hint = "Rust Cargo project detected; preferred first command: cargo test"
+    elif has_go:
+        test_hint = "Go module detected; preferred first command: go test ./..."
+    elif has_package_json:
+        test_hint = "Node package.json detected; inspect package scripts before selecting the test command."
+    elif has_pytest_config:
         test_hint = "pytest configuration detected; inspect it before selecting the test command."
     elif has_unittest:
         test_hint = "unittest-style tests detected; preferred first command: python -m unittest discover -s tests -v"

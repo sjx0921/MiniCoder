@@ -45,6 +45,31 @@ class FileToolTests(unittest.TestCase):
         self.assertEqual(risk, "high")
         self.assertIn("destructive", reason)
 
+    def test_generated_directories_are_hidden_from_default_listing(self):
+        (self.workspace / "__pycache__").mkdir()
+        (self.workspace / ".venv").mkdir()
+        write_file(self.workspace, "visible.txt", "ok")
+        listing = list_files(self.workspace)
+        self.assertIn("visible.txt", listing)
+        self.assertNotIn("__pycache__", listing)
+        self.assertNotIn(".venv", listing)
+
+    def test_replace_rejects_ambiguous_text(self):
+        write_file(self.workspace, "repeat.txt", "same same")
+        from tools.file_tools import replace_in_file
+        with self.assertRaises(ToolError):
+            replace_in_file(self.workspace, "repeat.txt", "same", "new")
+
+    def test_command_output_is_truncated(self):
+        output = run_command(self.workspace, 'python -c "print(\'x\' * 30000)"')
+        self.assertIn("[truncated after 20000 characters]", output)
+
+    @unittest.skipUnless(os.name == "nt", "PowerShell timeout behavior is Windows-specific")
+    def test_command_timeout_returns_clear_error(self):
+        with self.assertRaises(ToolError) as context:
+            run_command(self.workspace, "Start-Sleep -Seconds 2", timeout_seconds=1)
+        self.assertIn("timed out after 1s", str(context.exception))
+
     @unittest.skipUnless(os.name == "nt", "PowerShell behavior is Windows-specific")
     def test_powershell_command_preserves_chinese_output(self):
         output = run_command(self.workspace, 'Write-Output "中文输出"')

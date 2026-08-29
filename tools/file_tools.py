@@ -5,6 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 
+IGNORED_DIRECTORY_NAMES = {".git", ".venv", "venv", "__pycache__", "node_modules"}
+
+
 class ToolError(RuntimeError):
     """An error that is safe to send back to the model."""
 
@@ -45,7 +48,7 @@ def list_files(workspace: Path, path: str = ".", max_entries: int = 200) -> str:
     target = resolve_workspace_path(workspace, path)
     if not target.is_dir():
         raise ToolError(f"Not a directory: {path}")
-    entries = sorted(target.iterdir(), key=lambda entry: (not entry.is_dir(), entry.name.lower()))
+    entries = sorted((entry for entry in target.iterdir() if entry.name not in IGNORED_DIRECTORY_NAMES), key=lambda entry: (not entry.is_dir(), entry.name.lower()))
     lines = [("[dir] " if entry.is_dir() else "[file] ") + entry.name for entry in entries[:max_entries]]
     if len(entries) > max_entries:
         lines.append(f"[truncated: {len(entries) - max_entries} more entries]")
@@ -72,7 +75,7 @@ def search_text(workspace: Path, query: str, path: str = ".", max_results: int =
     target = resolve_workspace_path(workspace, path)
     if not target.exists():
         raise ToolError(f"Path does not exist: {path}")
-    files = [target] if target.is_file() else (entry for entry in target.rglob("*") if entry.is_file() and ".git" not in entry.parts)
+    files = [target] if target.is_file() else (entry for entry in target.rglob("*") if entry.is_file() and not any(part in IGNORED_DIRECTORY_NAMES for part in entry.parts))
     matches: list[str] = []
     for file_path in files:
         try:

@@ -75,7 +75,7 @@ class AgentLoopTests(unittest.TestCase):
             result = CodingAgent(workspace, client, approval_callback=lambda _name, _args, _risk, _reason: False).run("try writing")
             self.assertTrue(result.startswith("Acknowledged."))
             self.assertFalse((workspace / "blocked.txt").exists())
-            self.assertIn("denied by user", client.calls[1][-1]["content"])
+            self.assertIn("用户已拒绝", client.calls[1][-1]["content"])
 
     def test_plan_is_stored_and_returned_to_model(self):
         client = FakeClient([
@@ -105,6 +105,78 @@ class AgentLoopTests(unittest.TestCase):
         self.assertTrue(result.startswith("Finished."))
         self.assertIn("first tool call must be update_plan", client.calls[1][-1]["content"])
         self.assertEqual(client.calls[2][-1]["content"].split(":")[0], "Plan updated")
+
+    def test_denied_operation_is_not_requested_twice(self):
+        client = FakeClient([
+            {"role": "assistant", "tool_calls": [{"id": "one", "function": {"name": "write_file", "arguments": '{"path":"x.txt","content":"x"}'}}]},
+            {"role": "assistant", "tool_calls": [{"id": "two", "function": {"name": "write_file", "arguments": '{"path":"x.txt","content":"x"}'}}]},
+            {"role": "assistant", "content": "stopped"},
+        ])
+        approvals = []
+        with tempfile.TemporaryDirectory() as directory:
+            result = CodingAgent(Path(directory), client, approval_callback=lambda *args: approvals.append(args) or False).run("write a file")
+        self.assertTrue(result.startswith("stopped"))
+        self.assertEqual(len(approvals), 1)
+        self.assertIn("此前已被用户拒绝", client.calls[2][-1]["content"])
+
+    def test_mutation_after_successful_test_forces_reverification(self):
+        client = FakeClient([
+            {"role": "assistant", "tool_calls": [{"id": "test1", "function": {"name": "run_command", "arguments": '{"command":"python -m unittest discover -s tests -v"}'}}]},
+            {"role": "assistant", "tool_calls": [{"id": "write", "function": {"name": "write_file", "arguments": '{"path":"value.txt","content":"new"}'}}]},
+            {"role": "assistant", "content": "claimed success"},
+            {"role": "assistant", "tool_calls": [{"id": "test2", "function": {"name": "run_command", "arguments": '{"command":"python -m unittest discover -s tests -v"}'}}]},
+            {"role": "assistant", "content": "verified"},
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            (workspace / "tests").mkdir()
+            (workspace / "tests" / "test_ok.py").write_text("import unittest\nclass T(unittest.TestCase):\n    def test_ok(self): self.assertTrue(True)\n", encoding="utf-8")
+            result = CodingAgent(workspace, client).run("fix then test")
+        self.assertTrue(result.startswith("verified"))
+        self.assertIn("最后一次成功测试后又发生了文件修改", client.calls[3][-1]["content"])
+
+    def test_no_tools_request_skips_calls_and_automatic_git_review(self):
+        client = FakeClient([
+            {"role": "assistant", "tool_calls": [{"id": "read", "function": {"name": "list_files", "arguments": "{}"}}]},
+            {"role": "assistant", "content": "只回答问题"},
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            result = CodingAgent(Path(directory), client).run("不要执行任何工具，只回答问题")
+        self.assertTrue(result.startswith("只回答问题"))
+        self.assertIn("未执行自动 Git 审查", result)
+        self.assertIn("工具已被用户禁止", client.calls[1][-1]["content"])
+
+    def test_task_constraint_blocks_test_file_edits(self):
+        client = FakeClient([
+            {"role": "assistant", "tool_calls": [{"id": "write", "function": {"name": "write_file", "arguments": '{"path":"tests/test_x.py","content":"x"}'}}]},
+            {"role": "assistant", "content": "done"},
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            result = CodingAgent(Path(directory), client).run("不要修改测试，只修实现")
+        self.assertTrue(result.startswith("done"))
+        self.assertIn("禁止修改测试文件", client.calls[1][-1]["content"])
+
+    def test_chinese_task_sets_chinese_response_instruction(self):
+        client = FakeClient([{"role": "assistant", "content": "完成"}])
+        with tempfile.TemporaryDirectory() as directory:
+            CodingAgent(Path(directory), client).run("请用中文说明项目")
+        self.assertIn("reply in Chinese", client.calls[0][0]["content"])
+
+    def test_reset_clears_policy_and_verification_state(self):
+        client = FakeClient([])
+        with tempfile.TemporaryDirectory() as directory:
+            agent = CodingAgent(Path(directory), client)
+            agent._denied_operations.add("command:test")
+            agent._session_mutations.append("x.py")
+            agent._mutation_version = 2
+            agent._last_verified_mutation_version = 1
+            agent._tools_forbidden = True
+            agent.reset()
+        self.assertFalse(agent._denied_operations)
+        self.assertFalse(agent._session_mutations)
+        self.assertEqual(agent._mutation_version, 0)
+        self.assertEqual(agent._last_verified_mutation_version, -1)
+        self.assertFalse(agent._tools_forbidden)
 
 
 if __name__ == "__main__":

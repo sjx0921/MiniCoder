@@ -8,4 +8,4 @@ python main.py --workspace .
 在 Task> 后输入自然语言任务；单次任务：
 python main.py "检查项目并修复测试" --workspace .
 
-特色：持久会话与 /reset；自动识别操作系统、PowerShell、绝对工作区和 unittest 测试线索；用户要求先制定计划时，首个工具调用强制为 update_plan；目录列举、文本搜索、读写/精确替换文件、命令执行、Git 状态与差异审查；文件工具限制在工作区；支持 auto/ask/strict 确认模式，高风险操作始终确认；支持最大轮数、命令超时、UTF-8 输出、结构化上下文摘要和结束时 Git 改动报告。离线测试不需要 API Key。
+特色：持久会话与 /reset；自动识别操作系统、PowerShell、绝对工作区和 unittest 测试线索；用户要求先制定计划时，首个工具调用强制为 update_plan；目录列举、文本搜索、读写/精确替换文件、命令执行、Git 状态与差异审查；文件工具限制在工作区。注意 run_command 不是 OS 沙箱，仍可能访问工作区外路径；支持 auto/ask/strict 确认模式，高风险操作始终确认；支持最大轮数、命令超时、UTF-8 输出、结构化上下文摘要和结束时 Git 改动报告。离线测试不需要 API Key。

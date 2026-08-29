@@ -8,7 +8,7 @@ MiniCoder 是一个从零实现的本地编程智能体。它使用 OpenAI 兼�
 
 - OpenAI 兼容 `/chat/completions` 接口，可配置模型和网关地址
 - 本地 `list_files`、`read_file`、`write_file`、`replace_in_file`、`run_command` 工具
-- 工作区路径隔离：文件工具拒绝工作区以外的路径
+- 工作区路径隔离：文件工具拒绝工作区以外的路径（包括 `..` 与解析后的符号链接逃逸）
 - 自动感知操作系统、PowerShell/Shell、绝对工作区与测试框架，避免错误使用跨平台命令
 - Windows 下显式使用 PowerShell 并统一 UTF-8 命令输出
 - 命令超时、输出截断、工具错误回传模型
@@ -59,7 +59,7 @@ python main.py "为模块补充单元测试" --model gpt-4o-mini --max-turns 15
 
 ## 安全模型与限制
 
-文件工具被限制在 `--workspace` 内。`run_command` 按模型请求在该工作区启动 shell 命令，因此仅应在可信项目中运行；默认会逐项请求确认。`--auto-approve` 会关闭这一确认，适合已审查的自动化任务。当前版本没有跨进程持久记忆，也不会使用任何云端代码执行或文件 API。
+文件工具被限制在 `--workspace` 内。**`run_command` 不是 OS 级文件系统沙箱**：虽然命令从工作区启动，但 PowerShell/Shell 仍可能访问工作区外路径。因此仅应在可信项目中运行，并依靠确认机制控制风险；规则分类不能覆盖所有等价命令。默认 `ask` 模式会自动运行低风险命令，对中风险操作确认；高风险操作始终确认。`--auto-approve` 仅在用户显式传入时启用 `auto` 模式，不能与 `--approval-mode` 同时使用。当前版本没有跨进程持久记忆，也不会使用任何云端代码执行或文件 API。
 
 ## 开发与测试
 
