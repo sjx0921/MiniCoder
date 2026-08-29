@@ -3,9 +3,30 @@
 from __future__ import annotations
 
 import subprocess
+import re
 from pathlib import Path
 
 from tools.file_tools import ToolError
+
+
+def classify_command(command: str) -> tuple[str, str]:
+    """Classify shell commands for human approval; this is not an OS sandbox."""
+    normalized = command.lower()
+    high_risk_patterns = {
+        r"\brm\s+.*-[a-z]*r": "recursive deletion",
+        r"\bdel\s+": "file deletion",
+        r"\bremove-item\b": "file deletion",
+        r"\bformat\b": "disk formatting",
+        r"\bshutdown\b|\brestart-computer\b": "system shutdown",
+        r"\bgit\s+reset\s+--hard\b": "destructive Git reset",
+        r"\bgit\s+clean\s+-[a-z]*f": "destructive Git clean",
+    }
+    for pattern, reason in high_risk_patterns.items():
+        if re.search(pattern, normalized):
+            return "high", reason
+    if re.search(r"\b(curl|wget|invoke-webrequest|npm\s+install|pip\s+install)\b", normalized):
+        return "medium", "network or dependency operation"
+    return "low", "local command"
 
 
 def run_command(workspace: Path, command: str, timeout_seconds: int = 60, max_chars: int = 20_000) -> str:

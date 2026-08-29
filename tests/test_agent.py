@@ -63,7 +63,7 @@ class AgentLoopTests(unittest.TestCase):
             agent.run("first task")
             agent.run("second task")
         second_request = client.calls[1]
-        self.assertTrue(any("compacted locally" in message.get("content", "") for message in second_request))
+        self.assertTrue(any("Structured local session summary" in message.get("content", "") for message in second_request))
 
     def test_mutating_tool_can_be_denied(self):
         client = FakeClient([
@@ -72,10 +72,21 @@ class AgentLoopTests(unittest.TestCase):
         ])
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            result = CodingAgent(workspace, client, approval_callback=lambda _name, _args: False).run("try writing")
+            result = CodingAgent(workspace, client, approval_callback=lambda _name, _args, _risk, _reason: False).run("try writing")
             self.assertTrue(result.startswith("Acknowledged."))
             self.assertFalse((workspace / "blocked.txt").exists())
             self.assertIn("denied by user", client.calls[1][-1]["content"])
+
+    def test_plan_is_stored_and_returned_to_model(self):
+        client = FakeClient([
+            {"role": "assistant", "tool_calls": [{"id": "plan_1", "function": {"name": "update_plan", "arguments": '{"steps":[{"step":"Inspect files","status":"in_progress"},{"step":"Implement","status":"pending"}]}'}}]},
+            {"role": "assistant", "content": "Plan created."},
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            agent = CodingAgent(Path(directory), client)
+            agent.run("make a plan")
+        self.assertEqual(agent.plan[0], {"step": "Inspect files", "status": "in_progress"})
+        self.assertIn("Plan updated", client.calls[1][-1]["content"])
 
 
 if __name__ == "__main__":

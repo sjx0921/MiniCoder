@@ -5,6 +5,7 @@ from pathlib import Path
 from tools.file_tools import ToolError, list_files, read_file, resolve_workspace_path, search_text, write_file
 from tools.registry import ToolRegistry
 from tools.shell_tool import run_command
+from tools.shell_tool import classify_command
 
 
 class FileToolTests(unittest.TestCase):
@@ -37,6 +38,11 @@ class FileToolTests(unittest.TestCase):
         write_file(self.workspace, "src/example.txt", "first\nneedle here\n")
         result = search_text(self.workspace, "needle")
         self.assertIn("src\\example.txt:2:", result)
+
+    def test_destructive_command_is_high_risk(self):
+        risk, reason = classify_command("git reset --hard HEAD~1")
+        self.assertEqual(risk, "high")
+        self.assertIn("destructive", reason)
 
 
 if __name__ == "__main__":

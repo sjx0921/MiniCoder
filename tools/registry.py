@@ -6,9 +6,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from tools import ToolError, git_diff, git_status, list_files, read_file, replace_in_file, run_command, search_text, write_file
+from tools.shell_tool import classify_command
 
 
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
+    {"type": "function", "function": {"name": "update_plan", "description": "Create or update the task plan before and during implementation. Mark each step pending, in_progress, or completed.", "parameters": {"type": "object", "properties": {"steps": {"type": "array", "items": {"type": "object", "properties": {"step": {"type": "string"}, "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}}, "required": ["step", "status"]}}}, "required": ["steps"]}}},
     {"type": "function", "function": {"name": "list_files", "description": "List a directory inside the workspace.", "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "Directory relative to workspace; defaults to ."}}, "required": []}}},
     {"type": "function", "function": {"name": "read_file", "description": "Read a UTF-8 text file inside the workspace.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
     {"type": "function", "function": {"name": "search_text", "description": "Search UTF-8 workspace files for exact text and return matching lines.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "path": {"type": "string"}}, "required": ["query"]}}},
@@ -38,6 +40,14 @@ class ToolRegistry:
     def requires_confirmation(name: str) -> bool:
         """Writes and shell commands require an explicit human approval in CLI mode."""
         return name in {"write_file", "replace_in_file", "run_command"}
+
+    @staticmethod
+    def risk_level(name: str, arguments: dict[str, Any]) -> tuple[str, str]:
+        if name == "run_command":
+            return classify_command(str(arguments.get("command", "")))
+        if name in {"write_file", "replace_in_file"}:
+            return "medium", "workspace file modification"
+        return "low", "read-only operation"
 
     def execute(self, name: str, arguments: dict[str, Any]) -> str:
         tool = self._tools.get(name)

@@ -28,10 +28,10 @@ def create_agent(args: argparse.Namespace) -> CodingAgent:
     if not workspace.is_dir():
         raise SystemExit(f"Workspace is not a directory: {workspace}")
     client = LLMClient(base_url=args.base_url, model=args.model)
-    def approve(name: str, arguments: dict) -> bool:
-        if args.auto_approve:
+    def approve(name: str, arguments: dict, risk: str, reason: str) -> bool:
+        if args.auto_approve and risk != "high":
             return True
-        print(f"\nApproval required for {name}: {json.dumps(arguments, ensure_ascii=False)}")
+        print(f"\nApproval required ({risk} risk: {reason}) for {name}: {json.dumps(arguments, ensure_ascii=False)}")
         return input("Allow? [y/N] ").strip().lower() in {"y", "yes"}
 
     return CodingAgent(workspace, client, max_turns=args.max_turns, max_history_chars=args.max_history_chars, approval_callback=approve)
