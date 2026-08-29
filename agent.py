@@ -118,8 +118,6 @@ class CodingAgent:
         return "Plan updated: " + "; ".join(f"[{item['status']}] {item['step']}" for item in self.plan)
 
     def _git_review(self) -> str:
-        if not (self.workspace / ".git").exists():
-            return "Unavailable: workspace is not a Git repository."
         try:
             return f"Status:\n{git_status(self.workspace)}\nDiff stat:\n{git_diff(self.workspace)}"
         except Exception as exc:  # A workspace need not be a Git repository.
