@@ -40,7 +40,7 @@ class CodingAgent:
         self._mutation_version = 0
         self._last_verified_mutation_version = -1
         self._successful_commands: dict[str, int] = {}
-        self._session_mutations: list[str] = []
+        self._session_mutations: set[str] = set()
         self.reset()
 
     def reset(self) -> None:
@@ -58,7 +58,7 @@ class CodingAgent:
         self._mutation_version = 0
         self._last_verified_mutation_version = -1
         self._successful_commands = {}
-        self._session_mutations = []
+        self._session_mutations = set()
 
     def _history_size(self) -> int:
         return sum(len(str(message.get("content") or "")) + len(str(message.get("tool_calls") or "")) for message in self.messages)
@@ -143,19 +143,35 @@ class CodingAgent:
         return f"Agent stopped after reaching the maximum of {self.max_turns} turns; task may be incomplete."
 
     def _begin_task(self, task: str) -> None:
+        # Conversation messages persist, while all execution state below belongs
+        # only to the newly submitted task.
+        self.plan = []
+        self.activity_log = []
         self._awaiting_initial_plan = self._requires_initial_plan(task)
         self._tools_forbidden = any(phrase in task.lower() for phrase in ("不要执行任何工具", "不要使用任何工具", "do not use any tools", "don't use tools"))
-        self._no_test_changes = any(phrase in task.lower() for phrase in ("不要修改测试", "不修改测试", "do not modify tests", "don't modify tests"))
+        self._no_test_changes = self._detect_no_test_modifications(task)
         self._allowed_write_paths = set(re.findall(r"(?:只改|仅改|only modify)\s*[`'\"]?([\w./\\-]+)", task, flags=re.IGNORECASE))
         self._denied_operations = set()
         self._denied_write_paths = set()
         self._mutation_version = 0
         self._last_verified_mutation_version = -1
         self._successful_commands = {}
-        self._session_mutations = []
+        self._session_mutations = set()
         language = "Chinese" if re.search(r"[\u3400-\u9fff]", task) else "English"
         self.system_prompt = build_system_prompt(describe_environment(self.workspace), language)
         self.messages[0] = {"role": "system", "content": self.system_prompt}
+
+    @staticmethod
+    def _detect_no_test_modifications(task: str) -> bool:
+        """Recognize common Chinese/English ways to make tests read-only."""
+        text = task.lower()
+        patterns = (
+            r"(?:不要|禁止|不许|别|不可|不得).{0,12}(?:修改|改动|改|动|写入|编辑).{0,20}(?:测试|tests?)",
+            r"(?:测试|tests?).{0,20}(?:不要|禁止|不许|不可|不得).{0,12}(?:修改|改动|改|动|写入|编辑)",
+            r"(?:测试|tests?).{0,16}(?:目录|文件|下|folder|directory).{0,12}(?:禁止|不可|不得|不要|不许).{0,12}(?:修改|改动|改|动|写入|编辑)",
+            r"(?:do not|don't|never).{0,20}(?:modify|edit|write).{0,20}(?:test|tests)",
+        )
+        return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
 
     def _operation_signature(self, name: str, arguments: dict[str, Any]) -> str:
         if name == "run_command":
@@ -174,7 +190,8 @@ class CodingAgent:
             return "该命令可能绕过此前被拒绝的文件修改；未执行。"
         if name in {"write_file", "replace_in_file"}:
             path = str(arguments.get("path", "")).replace("\\", "/")
-            if self._no_test_changes and (path == "tests" or path.startswith("tests/")):
+            path_parts = tuple(part.lower() for part in Path(path).parts)
+            if self._no_test_changes and ("tests" in path_parts or Path(path).name.lower().startswith("test_")):
                 return "任务约束禁止修改测试文件；未执行。"
             if self._allowed_write_paths and path not in self._allowed_write_paths:
                 return f"任务约束只允许修改 {sorted(self._allowed_write_paths)}；未执行 {path}。"
@@ -189,7 +206,7 @@ class CodingAgent:
         result = self.registry.execute(name, arguments)
         if name in {"write_file", "replace_in_file"} and not result.startswith("Tool error:"):
             self._mutation_version += 1
-            self._session_mutations.append(str(arguments.get("path", "")))
+            self._session_mutations.add(str(arguments.get("path", "")))
         if name == "run_command" and result.startswith("Exit code: 0"):
             self._successful_commands[signature] = self._mutation_version
             if self._is_test_command(str(arguments.get("command", ""))):
@@ -211,7 +228,7 @@ class CodingAgent:
         plan_state = "; ".join(f"[{item['status']}] {item['step']}" for item in self.plan) or "未创建计划"
         facts = [
             "框架执行事实：",
-            f"- 本任务会话内修改的文件：{', '.join(self._session_mutations) or '无'}",
+            f"- 本任务会话内修改的文件：{', '.join(sorted(self._session_mutations)) or '无'}",
             f"- 最近成功测试对应代码版本：{self._last_verified_mutation_version if self._last_verified_mutation_version >= 0 else '未记录'}",
             f"- 当前代码修改版本：{self._mutation_version}",
             f"- 当前计划：{plan_state}",

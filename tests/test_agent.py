@@ -156,6 +156,44 @@ class AgentLoopTests(unittest.TestCase):
         self.assertTrue(result.startswith("done"))
         self.assertIn("禁止修改测试文件", client.calls[1][-1]["content"])
 
+    def test_equivalent_tests_directory_constraint_blocks_before_approval(self):
+        client = FakeClient([
+            {"role": "assistant", "tool_calls": [{"id": "write", "function": {"name": "write_file", "arguments": '{"path":"tests/test_x.py","content":"x"}'}}]},
+            {"role": "assistant", "content": "done"},
+        ])
+        approvals = []
+        with tempfile.TemporaryDirectory() as directory:
+            result = CodingAgent(Path(directory), client, approval_callback=lambda *args: approvals.append(args) or True).run("不要修改 tests 下任何文件，只修实现")
+        self.assertTrue(result.startswith("done"))
+        self.assertFalse(approvals)
+        self.assertIn("禁止修改测试文件", client.calls[1][-1]["content"])
+
+    def test_new_task_resets_plan_but_keeps_chat_history(self):
+        client = FakeClient([
+            {"role": "assistant", "tool_calls": [{"id": "plan", "function": {"name": "update_plan", "arguments": '{"steps":[{"step":"Old task","status":"in_progress"}]}'}}]},
+            {"role": "assistant", "content": "first done"},
+            {"role": "assistant", "content": "second done"},
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            agent = CodingAgent(Path(directory), client)
+            agent.run("first task")
+            result = agent.run("second task")
+        self.assertIn("当前计划：未创建计划", result)
+        self.assertEqual(agent.plan, [])
+        self.assertTrue(any(message.get("content") == "first task" for message in client.calls[2]))
+
+    def test_modified_files_are_unique_while_version_increments(self):
+        client = FakeClient([
+            {"role": "assistant", "tool_calls": [{"id": "one", "function": {"name": "write_file", "arguments": '{"path":"same.py","content":"one"}'}}]},
+            {"role": "assistant", "tool_calls": [{"id": "two", "function": {"name": "write_file", "arguments": '{"path":"same.py","content":"two"}'}}]},
+            {"role": "assistant", "content": "done"},
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            result = CodingAgent(Path(directory), client).run("edit twice")
+        self.assertIn("修改的文件：same.py", result)
+        self.assertIn("当前代码修改版本：2", result)
+        self.assertEqual(result.count("same.py"), 1)
+
     def test_chinese_task_sets_chinese_response_instruction(self):
         client = FakeClient([{"role": "assistant", "content": "完成"}])
         with tempfile.TemporaryDirectory() as directory:
@@ -167,7 +205,7 @@ class AgentLoopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             agent = CodingAgent(Path(directory), client)
             agent._denied_operations.add("command:test")
-            agent._session_mutations.append("x.py")
+            agent._session_mutations.add("x.py")
             agent._mutation_version = 2
             agent._last_verified_mutation_version = 1
             agent._tools_forbidden = True
