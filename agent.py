@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from llm import LLMClient, LLMError
-from prompts import SYSTEM_PROMPT
+from prompts import build_system_prompt
+from runtime import describe_environment
 from tools.registry import TOOL_DEFINITIONS, ToolRegistry
 from tools.git_tools import git_diff, git_status
 
@@ -23,6 +24,7 @@ class CodingAgent:
         self.max_turns = max_turns
         self.max_history_chars = max_history_chars
         self.registry = ToolRegistry(self.workspace)
+        self.system_prompt = build_system_prompt(describe_environment(self.workspace))
         self.approval_callback = approval_callback or (lambda _name, _arguments, _risk, _reason: True)
         self.messages: list[dict[str, Any]] = []
         self.plan: list[dict[str, str]] = []
@@ -32,7 +34,7 @@ class CodingAgent:
 
     def reset(self) -> None:
         """Clear conversation state while preserving the configured workspace."""
-        self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        self.messages = [{"role": "system", "content": self.system_prompt}]
         self.plan = []
         self.task_log = []
         self.activity_log = []
@@ -85,6 +87,7 @@ class CodingAgent:
             for call in tool_calls:
                 function = call.get("function", {})
                 name = function.get("name", "")
+                arguments: dict[str, Any] = {}
                 try:
                     arguments = json.loads(function.get("arguments", "{}"))
                 except json.JSONDecodeError as exc:
@@ -98,10 +101,28 @@ class CodingAgent:
                             result = f"Tool denied by user: {name} was not executed."
                         else:
                             result = self.registry.execute(name, arguments)
-                print(f"[turn {turn}] {name}: {result[:500]}")
+                print(f"[进度 第{turn}轮] {self._progress_message(name, arguments)}")
+                print(f"[工具结果] {result[:500]}")
                 self.activity_log.append(f"{name}: {result[:300]}")
                 self.messages.append({"role": "tool", "tool_call_id": call.get("id", "missing-id"), "content": result})
         return f"Agent stopped after reaching the maximum of {self.max_turns} turns."
+
+    @staticmethod
+    def _progress_message(name: str, arguments: dict[str, Any]) -> str:
+        labels = {
+            "inspect_environment": "正在确认运行环境和推荐测试方式",
+            "update_plan": "正在更新任务计划",
+            "list_files": "正在查看项目目录",
+            "read_file": "正在读取文件",
+            "search_text": "正在搜索项目文本",
+            "write_file": "正在写入实现文件",
+            "replace_in_file": "正在做精确代码替换",
+            "run_command": "正在执行验证命令",
+            "git_status": "正在检查 Git 工作区状态",
+            "git_diff": "正在审查文件改动",
+        }
+        detail = arguments.get("path") or arguments.get("command") or ""
+        return f"{labels.get(name, '正在调用本地工具')}{(': ' + str(detail)) if detail else ''}"
 
     def _update_plan(self, arguments: dict[str, Any]) -> str:
         steps = arguments.get("steps")

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-import subprocess
 import re
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
 from tools.file_tools import ToolError
@@ -34,9 +36,17 @@ def run_command(workspace: Path, command: str, timeout_seconds: int = 60, max_ch
         raise ToolError("command must not be empty")
     if not 1 <= timeout_seconds <= 300:
         raise ToolError("timeout_seconds must be between 1 and 300")
+    if os.name == "nt":
+        powershell = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
+        if not powershell:
+            raise ToolError("Windows PowerShell was not found; cannot execute a command safely")
+        utf8_prefix = "$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); "
+        invocation: list[str] = [powershell, "-NoProfile", "-NonInteractive", "-Command", utf8_prefix + command]
+    else:
+        invocation = ["/bin/sh", "-lc", command]
     try:
         result = subprocess.run(
-            command, cwd=workspace, shell=True, text=True, encoding="utf-8", errors="replace",
+            invocation, cwd=workspace, text=True, encoding="utf-8", errors="replace",
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout_seconds, check=False,
         )
     except subprocess.TimeoutExpired as exc:

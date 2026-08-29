@@ -7,9 +7,11 @@ from typing import Any, Callable
 
 from tools import ToolError, git_diff, git_status, list_files, read_file, replace_in_file, run_command, search_text, write_file
 from tools.shell_tool import classify_command
+from runtime import describe_environment
 
 
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
+    {"type": "function", "function": {"name": "inspect_environment", "description": "Show the authoritative operating system, shell, absolute workspace, Python, and test-runner guidance. Call this before using shell commands when uncertain.", "parameters": {"type": "object", "properties": {}, "required": []}}},
     {"type": "function", "function": {"name": "update_plan", "description": "Create or update the task plan before and during implementation. Mark each step pending, in_progress, or completed.", "parameters": {"type": "object", "properties": {"steps": {"type": "array", "items": {"type": "object", "properties": {"step": {"type": "string"}, "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}}, "required": ["step", "status"]}}}, "required": ["steps"]}}},
     {"type": "function", "function": {"name": "list_files", "description": "List a directory inside the workspace.", "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "Directory relative to workspace; defaults to ."}}, "required": []}}},
     {"type": "function", "function": {"name": "read_file", "description": "Read a UTF-8 text file inside the workspace.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
@@ -34,6 +36,7 @@ class ToolRegistry:
             "run_command": run_command,
             "git_status": git_status,
             "git_diff": git_diff,
+            "inspect_environment": lambda _workspace: describe_environment(self.workspace),
         }
 
     @staticmethod

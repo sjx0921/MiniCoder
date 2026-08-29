@@ -88,6 +88,12 @@ class AgentLoopTests(unittest.TestCase):
         self.assertEqual(agent.plan[0], {"step": "Inspect files", "status": "in_progress"})
         self.assertIn("Plan updated", client.calls[1][-1]["content"])
 
+    def test_system_prompt_includes_runtime_context(self):
+        client = FakeClient([{"role": "assistant", "content": "done"}])
+        with tempfile.TemporaryDirectory() as directory:
+            CodingAgent(Path(directory), client).run("check")
+        self.assertIn("Runtime environment (authoritative)", client.calls[0][0]["content"])
+
 
 if __name__ == "__main__":
     unittest.main()

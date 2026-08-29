@@ -9,6 +9,8 @@ MiniCoder 是一个从零实现的本地编程智能体。它使用 OpenAI 兼�
 - OpenAI 兼容 `/chat/completions` 接口，可配置模型和网关地址
 - 本地 `list_files`、`read_file`、`write_file`、`replace_in_file`、`run_command` 工具
 - 工作区路径隔离：文件工具拒绝工作区以外的路径
+- 自动感知操作系统、PowerShell/Shell、绝对工作区与测试框架，避免错误使用跨平台命令
+- Windows 下显式使用 PowerShell 并统一 UTF-8 命令输出
 - 命令超时、输出截断、工具错误回传模型
 - 最大轮数限制，避免无限工具调用
 - 上下文字符上限与本地压缩，避免会话无限膨胀
@@ -46,7 +48,7 @@ python main.py "检查测试失败原因并修复它" --workspace C:\path\to\pro
 python main.py --workspace .
 ```
 
-可用参数：`--model`、`--base-url`、`--max-turns`、`--max-history-chars` 和 `--auto-approve`。例如：
+可用参数：`--model`、`--base-url`、`--max-turns`、`--max-history-chars`、`--approval-mode` 和 `--auto-approve`。`--approval-mode ask`（默认）自动执行低风险命令，对写文件、安装依赖等中风险操作确认；`auto` 自动执行低、中风险操作；`strict` 对所有修改/命令确认。高风险操作始终确认。`--auto-approve` 是 `--approval-mode auto` 的兼容别名。例如：
 
 ```powershell
 python main.py "为模块补充单元测试" --model gpt-4o-mini --max-turns 15

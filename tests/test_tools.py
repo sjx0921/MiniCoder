@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import os
 from pathlib import Path
 
 from tools.file_tools import ToolError, list_files, read_file, resolve_workspace_path, search_text, write_file
@@ -43,6 +44,11 @@ class FileToolTests(unittest.TestCase):
         risk, reason = classify_command("git reset --hard HEAD~1")
         self.assertEqual(risk, "high")
         self.assertIn("destructive", reason)
+
+    @unittest.skipUnless(os.name == "nt", "PowerShell behavior is Windows-specific")
+    def test_powershell_command_preserves_chinese_output(self):
+        output = run_command(self.workspace, 'Write-Output "中文输出"')
+        self.assertIn("中文输出", output)
 
 
 if __name__ == "__main__":
