@@ -30,6 +30,7 @@ class CodingAgent:
         self.plan: list[dict[str, str]] = []
         self.task_log: list[str] = []
         self.activity_log: list[str] = []
+        self._awaiting_initial_plan = False
         self.reset()
 
     def reset(self) -> None:
@@ -38,6 +39,7 @@ class CodingAgent:
         self.plan = []
         self.task_log = []
         self.activity_log = []
+        self._awaiting_initial_plan = False
 
     def _history_size(self) -> int:
         return sum(len(str(message.get("content") or "")) + len(str(message.get("tool_calls") or "")) for message in self.messages)
@@ -71,6 +73,7 @@ class CodingAgent:
     def run(self, task: str) -> str:
         if not task.strip():
             return "Please provide a task."
+        self._awaiting_initial_plan = self._requires_initial_plan(task)
         self.task_log.append(task)
         self.messages.append({"role": "user", "content": task})
         for turn in range(1, self.max_turns + 1):
@@ -82,8 +85,19 @@ class CodingAgent:
             self.messages.append(assistant_message)
             tool_calls = assistant_message.get("tool_calls") or []
             if not tool_calls:
+                if self._awaiting_initial_plan:
+                    self.messages.append({"role": "user", "content": "你尚未遵守要求：此任务明确要求先制定计划。请先且仅先调用 update_plan，然后再继续。"})
+                    continue
                 final_message = str(assistant_message.get("content") or "Agent finished without a final message.")
                 return f"{final_message}\n\nLocal Git review:\n{self._git_review()}"
+            if self._awaiting_initial_plan and tool_calls[0].get("function", {}).get("name") != "update_plan":
+                for call in tool_calls:
+                    name = call.get("function", {}).get("name", "")
+                    result = "Tool error: this task explicitly requires planning first. The first tool call must be update_plan; no tool was executed."
+                    print(f"[进度 第{turn}轮] 已阻止 {name}：必须先制定计划")
+                    self.activity_log.append(f"{name}: blocked until update_plan")
+                    self.messages.append({"role": "tool", "tool_call_id": call.get("id", "missing-id"), "content": result})
+                continue
             for call in tool_calls:
                 function = call.get("function", {})
                 name = function.get("name", "")
@@ -95,6 +109,8 @@ class CodingAgent:
                 else:
                     if name == "update_plan":
                         result = self._update_plan(arguments)
+                        if not result.startswith("Tool error:"):
+                            self._awaiting_initial_plan = False
                     else:
                         risk, reason = self.registry.risk_level(name, arguments)
                         if self.registry.requires_confirmation(name) and not self.approval_callback(name, arguments, risk, reason):
@@ -106,6 +122,12 @@ class CodingAgent:
                 self.activity_log.append(f"{name}: {result[:300]}")
                 self.messages.append({"role": "tool", "tool_call_id": call.get("id", "missing-id"), "content": result})
         return f"Agent stopped after reaching the maximum of {self.max_turns} turns."
+
+    @staticmethod
+    def _requires_initial_plan(task: str) -> bool:
+        normalized = task.lower()
+        phrases = ("先制定计划", "先制订计划", "先给出计划", "先做计划", "first make a plan", "plan first")
+        return any(phrase in normalized for phrase in phrases)
 
     @staticmethod
     def _progress_message(name: str, arguments: dict[str, Any]) -> str:

@@ -94,6 +94,18 @@ class AgentLoopTests(unittest.TestCase):
             CodingAgent(Path(directory), client).run("check")
         self.assertIn("Runtime environment (authoritative)", client.calls[0][0]["content"])
 
+    def test_explicit_plan_first_blocks_other_first_tool_call(self):
+        client = FakeClient([
+            {"role": "assistant", "tool_calls": [{"id": "blocked_1", "function": {"name": "list_files", "arguments": "{}"}}]},
+            {"role": "assistant", "tool_calls": [{"id": "plan_1", "function": {"name": "update_plan", "arguments": '{"steps":[{"step":"Inspect","status":"in_progress"}]}'}}]},
+            {"role": "assistant", "content": "Finished."},
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            result = CodingAgent(Path(directory), client).run("先制定计划，然后检查项目")
+        self.assertTrue(result.startswith("Finished."))
+        self.assertIn("first tool call must be update_plan", client.calls[1][-1]["content"])
+        self.assertEqual(client.calls[2][-1]["content"].split(":")[0], "Plan updated")
+
 
 if __name__ == "__main__":
     unittest.main()
