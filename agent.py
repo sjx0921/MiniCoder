@@ -113,12 +113,32 @@ class CodingAgent:
                     continue
                 final_message = str(assistant_message.get("content") or "Agent finished without a final message.")
                 return self._final_response(final_message)
-            if self._awaiting_initial_plan and tool_calls[0].get("function", {}).get("name") != "update_plan":
+            if self._awaiting_initial_plan:
+                plan_calls = [call for call in tool_calls if call.get("function", {}).get("name") == "update_plan"]
+                if not plan_calls:
+                    self._block_initial_plan_batch(turn, tool_calls)
+                    continue
+                # A batch that contains a plan may be emitted in any order by
+                # the model. Execute only update_plan calls in this turn; all
+                # other calls must wait for the next model response.
                 for call in tool_calls:
-                    name = call.get("function", {}).get("name", "")
-                    result = "Tool error: this task explicitly requires planning first. The first tool call must be update_plan; no tool was executed."
-                    print(f"[进度 第{turn}轮] 已阻止 {name}：必须先制定计划")
-                    self.activity_log.append(f"{name}: blocked until update_plan")
+                    function = call.get("function", {})
+                    name = function.get("name", "")
+                    if name != "update_plan":
+                        self._block_initial_plan_call(turn, call)
+                        continue
+                    arguments: dict[str, Any] = {}
+                    try:
+                        arguments = json.loads(function.get("arguments", "{}"))
+                    except json.JSONDecodeError as exc:
+                        result = f"Tool error: invalid JSON arguments: {exc}"
+                    else:
+                        result = self._update_plan(arguments)
+                        if not result.startswith("Tool error:"):
+                            self._awaiting_initial_plan = False
+                    print(f"[进度 第{turn}轮] {self._progress_message(name, arguments)}")
+                    print(f"[工具结果] {result[:500]}")
+                    self.activity_log.append(f"{name}: {result[:300]}")
                     self.messages.append({"role": "tool", "tool_call_id": call.get("id", "missing-id"), "content": result})
                 continue
             for call in tool_calls:
@@ -141,6 +161,17 @@ class CodingAgent:
                 self.activity_log.append(f"{name}: {result[:300]}")
                 self.messages.append({"role": "tool", "tool_call_id": call.get("id", "missing-id"), "content": result})
         return f"Agent stopped after reaching the maximum of {self.max_turns} turns; task may be incomplete."
+
+    def _block_initial_plan_batch(self, turn: int, tool_calls: list[dict[str, Any]]) -> None:
+        for call in tool_calls:
+            self._block_initial_plan_call(turn, call)
+
+    def _block_initial_plan_call(self, turn: int, call: dict[str, Any]) -> None:
+        name = call.get("function", {}).get("name", "")
+        result = "Tool error: this task explicitly requires planning first. The first permitted tool call is update_plan; no tool was executed."
+        print(f"[进度 第{turn}轮] 已阻止 {name}：必须先制定计划")
+        self.activity_log.append(f"{name}: blocked until update_plan")
+        self.messages.append({"role": "tool", "tool_call_id": call.get("id", "missing-id"), "content": result})
 
     def _begin_task(self, task: str) -> None:
         # Conversation messages persist, while all execution state below belongs

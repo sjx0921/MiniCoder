@@ -103,8 +103,49 @@ class AgentLoopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             result = CodingAgent(Path(directory), client).run("先制定计划，然后检查项目")
         self.assertTrue(result.startswith("Finished."))
-        self.assertIn("first tool call must be update_plan", client.calls[1][-1]["content"])
+        self.assertIn("first permitted tool call is update_plan", client.calls[1][-1]["content"])
         self.assertEqual(client.calls[2][-1]["content"].split(":")[0], "Plan updated")
+
+    def test_plan_first_allows_update_plan_as_first_tool_call(self):
+        client = FakeClient([
+            {"role": "assistant", "tool_calls": [{"id": "plan", "function": {"name": "update_plan", "arguments": '{"steps":[{"step":"Inspect","status":"in_progress"}]}'}}]},
+            {"role": "assistant", "content": "planned"},
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            agent = CodingAgent(Path(directory), client)
+            result = agent.run("先制定计划，然后继续")
+        self.assertTrue(result.startswith("planned"))
+        self.assertEqual(agent.plan, [{"step": "Inspect", "status": "in_progress"}])
+        self.assertIn("Plan updated", client.calls[1][-1]["content"])
+
+    def test_plan_first_batch_executes_plan_and_blocks_other_tools(self):
+        client = FakeClient([
+            {"role": "assistant", "tool_calls": [
+                {"id": "environment", "function": {"name": "inspect_environment", "arguments": "{}"}},
+                {"id": "plan", "function": {"name": "update_plan", "arguments": '{"steps":[{"step":"Inspect","status":"in_progress"}]}'}} ,
+                {"id": "files", "function": {"name": "list_files", "arguments": "{}"}},
+            ]},
+            {"role": "assistant", "content": "planned"},
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            agent = CodingAgent(Path(directory), client)
+            result = agent.run("先制定计划，再检查项目")
+        self.assertTrue(result.startswith("planned"))
+        tool_results = [message["content"] for message in client.calls[1] if message["role"] == "tool"]
+        self.assertEqual(sum("Plan updated" in content for content in tool_results), 1)
+        self.assertEqual(sum("first permitted tool call" in content for content in tool_results), 2)
+        self.assertEqual(agent.plan, [{"step": "Inspect", "status": "in_progress"}])
+
+    def test_plan_first_allows_normal_tool_on_next_model_turn(self):
+        client = FakeClient([
+            {"role": "assistant", "tool_calls": [{"id": "plan", "function": {"name": "update_plan", "arguments": '{"steps":[{"step":"Inspect","status":"in_progress"}]}'}}]},
+            {"role": "assistant", "tool_calls": [{"id": "files", "function": {"name": "list_files", "arguments": "{}"}}]},
+            {"role": "assistant", "content": "done"},
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            result = CodingAgent(Path(directory), client).run("先制定计划，然后检查目录")
+        self.assertTrue(result.startswith("done"))
+        self.assertIn("[empty directory]", client.calls[2][-1]["content"])
 
     def test_denied_operation_is_not_requested_twice(self):
         client = FakeClient([
