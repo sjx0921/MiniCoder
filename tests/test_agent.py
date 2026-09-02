@@ -209,6 +209,58 @@ class AgentLoopTests(unittest.TestCase):
         self.assertFalse(approvals)
         self.assertIn("禁止修改测试文件", client.calls[1][-1]["content"])
 
+    def test_allowed_write_path_blocks_other_file_before_approval(self):
+        client = FakeClient([
+            {"role": "assistant", "tool_calls": [{"id": "write", "function": {"name": "replace_in_file", "arguments": '{"path":"report.py","old_text":"old","new_text":"new"}'}}]},
+            {"role": "assistant", "content": "done"},
+        ])
+        approvals = []
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            (workspace / "report.py").write_text("old", encoding="utf-8")
+            result = CodingAgent(workspace, client, approval_callback=lambda *args: approvals.append(args) or True).run(
+                "本任务只允许修改 text_utils.py。"
+            )
+            self.assertEqual((workspace / "report.py").read_text(encoding="utf-8"), "old")
+        self.assertTrue(result.startswith("done"))
+        self.assertFalse(approvals)
+        self.assertIn("report.py 不在允许范围内", client.calls[1][-1]["content"])
+
+    def test_allowed_write_path_allows_normalized_equivalent_path(self):
+        client = FakeClient([
+            {"role": "assistant", "tool_calls": [{"id": "write", "function": {"name": "write_file", "arguments": '{"path":".\\\\text_utils.py","content":"updated"}'}}]},
+            {"role": "assistant", "content": "done"},
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            result = CodingAgent(workspace, client).run("不要修改除 text_utils.py 之外的文件")
+            self.assertEqual((workspace / "text_utils.py").read_text(encoding="utf-8"), "updated")
+        self.assertTrue(result.startswith("done"))
+
+    def test_allowed_write_path_recognizes_chinese_synonyms_and_english(self):
+        cases = (
+            "只修改 text_utils.py",
+            "只能改 text_utils.py",
+            "only modify text_utils.py",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            agent = CodingAgent(Path(directory), FakeClient([]))
+            for task in cases:
+                agent._begin_task(task)
+                self.assertEqual(agent._allowed_write_paths, {"text_utils.py"})
+
+    def test_new_task_clears_allowed_write_paths(self):
+        client = FakeClient([
+            {"role": "assistant", "content": "first"},
+            {"role": "assistant", "content": "second"},
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            agent = CodingAgent(Path(directory), client)
+            agent.run("本任务只允许修改 text_utils.py")
+            self.assertEqual(agent._allowed_write_paths, {"text_utils.py"})
+            agent.run("检查项目")
+        self.assertFalse(agent._allowed_write_paths)
+
     def test_new_task_resets_plan_but_keeps_chat_history(self):
         client = FakeClient([
             {"role": "assistant", "tool_calls": [{"id": "plan", "function": {"name": "update_plan", "arguments": '{"steps":[{"step":"Old task","status":"in_progress"}]}'}}]},

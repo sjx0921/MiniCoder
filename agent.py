@@ -15,6 +15,9 @@ from tools.git_tools import git_diff, git_status
 
 
 class CodingAgent:
+    # Keep the policy in one place so every structured tool that can directly
+    # change a workspace file is checked before approval or dispatch.
+    _FILE_MUTATION_TOOLS = frozenset({"write_file", "replace_in_file"})
     def __init__(self, workspace: Path, client: LLMClient, max_turns: int = 20, max_history_chars: int = 80_000, approval_callback: Callable[[str, dict[str, Any], str, str], bool] | None = None) -> None:
         if max_turns < 1:
             raise ValueError("max_turns must be at least 1")
@@ -181,7 +184,7 @@ class CodingAgent:
         self._awaiting_initial_plan = self._requires_initial_plan(task)
         self._tools_forbidden = any(phrase in task.lower() for phrase in ("不要执行任何工具", "不要使用任何工具", "do not use any tools", "don't use tools"))
         self._no_test_changes = self._detect_no_test_modifications(task)
-        self._allowed_write_paths = set(re.findall(r"(?:只改|仅改|only modify)\s*[`'\"]?([\w./\\-]+)", task, flags=re.IGNORECASE))
+        self._allowed_write_paths = self._detect_allowed_write_paths(task)
         self._denied_operations = set()
         self._denied_write_paths = set()
         self._mutation_version = 0
@@ -204,11 +207,40 @@ class CodingAgent:
         )
         return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
 
+    @staticmethod
+    def _normalize_workspace_path(path: str) -> str:
+        """Return a stable relative-path spelling for task-policy comparisons.
+
+        The file tools remain responsible for enforcing workspace containment.
+        This normalization only makes equivalent relative spellings such as
+        ``.\\text_utils.py`` and ``text_utils.py`` compare equally.
+        """
+        normalized = str(path).strip().replace("\\", "/")
+        while normalized.startswith("./"):
+            normalized = normalized[2:]
+        return normalized.rstrip("/").lower()
+
+    @classmethod
+    def _detect_allowed_write_paths(cls, task: str) -> set[str]:
+        """Extract a task-level allowlist from common Chinese/English wording."""
+        patterns = (
+            r"(?:本任务\s*)?(?:只允许修改|只允许改|只修改|只能修改|只能改|仅允许修改|仅修改)\s*(?:文件\s*)?[`'\"]?([\w./\\-]+)",
+            r"不要\s*修改\s*除\s*[`'\"]?([\w./\\-]+)\s*[`'\"]?\s*之外(?:的文件)?",
+            r"\bonly\s+(?:allow(?:ed)?\s+to\s+)?modify\s+(?:the\s+)?(?:file\s+)?[`'\"]?([\w./\\-]+)",
+        )
+        paths: set[str] = set()
+        for pattern in patterns:
+            for match in re.findall(pattern, task, flags=re.IGNORECASE):
+                normalized = cls._normalize_workspace_path(match)
+                if normalized:
+                    paths.add(normalized)
+        return paths
+
     def _operation_signature(self, name: str, arguments: dict[str, Any]) -> str:
         if name == "run_command":
             return f"command:{' '.join(str(arguments.get('command', '')).lower().split())}"
-        if name in {"write_file", "replace_in_file"}:
-            return f"write:{str(arguments.get('path', '')).replace('\\', '/').lower()}"
+        if name in self._FILE_MUTATION_TOOLS:
+            return f"write:{self._normalize_workspace_path(str(arguments.get('path', '')))}"
         return f"{name}:{json.dumps(arguments, sort_keys=True, ensure_ascii=False)}"
 
     def _execute_with_policy(self, name: str, arguments: dict[str, Any]) -> str:
@@ -219,23 +251,24 @@ class CodingAgent:
             return "该操作此前已被用户拒绝；未收到明确重试要求，因此不会再次请求或执行。"
         if name == "run_command" and any(path and path.lower() in str(arguments.get("command", "")).lower() for path in self._denied_write_paths):
             return "该命令可能绕过此前被拒绝的文件修改；未执行。"
-        if name in {"write_file", "replace_in_file"}:
-            path = str(arguments.get("path", "")).replace("\\", "/")
+        if name in self._FILE_MUTATION_TOOLS:
+            path = self._normalize_workspace_path(str(arguments.get("path", "")))
             path_parts = tuple(part.lower() for part in Path(path).parts)
             if self._no_test_changes and ("tests" in path_parts or Path(path).name.lower().startswith("test_")):
                 return "任务约束禁止修改测试文件；未执行。"
             if self._allowed_write_paths and path not in self._allowed_write_paths:
-                return f"任务约束只允许修改 {sorted(self._allowed_write_paths)}；未执行 {path}。"
+                allowed = ", ".join(sorted(self._allowed_write_paths))
+                return f"任务约束仅允许修改 {allowed}；{path} 不在允许范围内，未执行。"
         if name == "run_command" and self._successful_commands.get(signature) == self._mutation_version:
             return "该命令已在当前代码版本成功执行；为避免重复，未再次运行。"
         risk, reason = self.registry.risk_level(name, arguments)
         if self.registry.requires_confirmation(name) and not self.approval_callback(name, arguments, risk, reason):
             self._denied_operations.add(signature)
-            if name in {"write_file", "replace_in_file"}:
-                self._denied_write_paths.add(str(arguments.get("path", "")).replace("\\", "/"))
+            if name in self._FILE_MUTATION_TOOLS:
+                self._denied_write_paths.add(self._normalize_workspace_path(str(arguments.get("path", ""))))
             return f"用户已拒绝此操作：{name} 未执行。这不是普通工具错误，不应自动重试或绕过。"
         result = self.registry.execute(name, arguments)
-        if name in {"write_file", "replace_in_file"} and not result.startswith("Tool error:"):
+        if name in self._FILE_MUTATION_TOOLS and not result.startswith("Tool error:"):
             self._mutation_version += 1
             self._session_mutations.add(str(arguments.get("path", "")))
         if name == "run_command" and result.startswith("Exit code: 0"):
